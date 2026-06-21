@@ -49,6 +49,8 @@ namespace OverlayTestCounter
         const int VK_F9 = 0x78;
         const int VK_ADD = 0x6B;       // Numpad +
         const int VK_SUBTRACT = 0x6D;  // Numpad -
+        const int VK_F10 = 0x79;
+
 
         // Stopwatch controls
         const int VK_NUMPAD1 = 0x61;
@@ -72,9 +74,36 @@ namespace OverlayTestCounter
         //Clock Button
         const int VK_F11 = 0x7A;
 
+        // Note Controls
+        const int VK_PRIOR = 0x21; // Page Up
+        const int VK_NEXT = 0x22;  // Page Down
+        const int VK_LEFT = 0x25;
+        const int VK_UP = 0x26;
+        const int VK_RIGHT = 0x27;
+        const int VK_DOWN = 0x28;
+        const int VK_SPACE = 0x20;
+        const int VK_BACK = 0x08;
+        const int VK_RETURN = 0x0D; // Enter key
+        const int VK_CONTROL = 0x11;
+
         // ====================================================================
         // APPLICATION STATE VARIABLES
         // ====================================================================
+
+        // Floating Notes State
+        static bool _notesVisible = false;
+        static bool _writingMode = false;
+        static string _noteText = "Type here...";
+        static float _noteX = 50f;
+        static float _noteY = 500f; 
+
+        // Note Debounce Variables
+        static bool _pgUpWasPressed = false;
+        static bool _pgDnWasPressed = false;
+        static bool _backWasPressed = false;
+        static bool _spaceWasPressed = false;
+        static bool[] _keyWasPressed = new bool[256]; // Handles A-Z debouncing effortlessly
+        static bool _ctrlF11WasPressed = false;
 
         // Kill counter state
         static int _counter = 0;
@@ -104,6 +133,7 @@ namespace OverlayTestCounter
         static bool _gpuLoadVisible = true;
         static bool _fpsVisible = true;
 
+
         // --- Debounce Flags ---
         // These prevent a single key press from triggering an action dozens of times a second.
         // We only trigger an action when the state changes from 'unpressed' to 'pressed'.
@@ -111,6 +141,7 @@ namespace OverlayTestCounter
         static bool _f9WasPressed = false;
         static bool _f11WasPressed = false;
         static bool _f12WasPressed = false;
+        static bool _enterWasPressed = false;
 
         static bool _addWasPressed = false;
         static bool _subtractWasPressed = false;
@@ -218,6 +249,10 @@ namespace OverlayTestCounter
             _screenWidth = GetSystemMetrics(SM_CXSCREEN);
             _screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
+            // Set default note position to bottom left
+            _noteX = _screenWidth * 0.02f;
+            _noteY = _screenHeight * 0.75f;
+
             // Get device context to check monitor refresh rate. 
             // Matching overlay FPS to Monitor Hz reduces tearing/flicker.
             IntPtr hdc = GetDC(IntPtr.Zero);
@@ -241,7 +276,14 @@ namespace OverlayTestCounter
             window.DestroyGraphics += Window_DestroyGraphics;
 
             // Print instructions to the console
-            Console.WriteLine("Overlay is running.");
+            Console.WriteLine("Overlay is running");
+            Console.WriteLine("------------------------------------------------");
+            Console.WriteLine("PAGE DOWN -> Toggle YuiNotes Visibility");
+            Console.WriteLine("CTRL + F11 -> Clear notes to a single period");
+            Console.WriteLine("PAGE UP -> Toggle YuiNotes Edit Mode");
+            Console.WriteLine("   *WHILE EDIT MODE IS ACTIVE:");
+            Console.WriteLine("   *Arrow Keys -> Move the YuiNote");
+            Console.WriteLine("   *A-Z, Space, Enter, Backspace -> Edit your YuiNote");
             Console.WriteLine("------------------------------------------------");
             Console.WriteLine("F8 -> Toggle Counter Visibility");
             Console.WriteLine("Numpad+ -> Add one to counter");
@@ -313,14 +355,93 @@ namespace OverlayTestCounter
             bool numpad9Pressed = (GetAsyncKeyState(VK_NUMPAD9) & 0x8000) != 0;
 
             //Crosshair and Panic Mode and Clock
-            bool f11IsPressed = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
             bool f12IsPressed = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
             bool numpad0Pressed = (GetAsyncKeyState(VK_NUMPAD0) & 0x8000) != 0;
+
+            //Clock and clear note logic
+            bool ctrlIsPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool f11IsPressed = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+
+            // Wipe Notes (Ctrl + F11)
+            if (ctrlIsPressed && f11IsPressed && !_ctrlF11WasPressed)
+            {
+                _noteText = ".";
+            }
+            _ctrlF11WasPressed = ctrlIsPressed && f11IsPressed;
+
+            // System Clock Toggle (Only F11, NO Ctrl)
+            if (!ctrlIsPressed && f11IsPressed && !_f11WasPressed)
+            {
+                // Your existing clock toggle logic here, for example:
+                _clockVisible = !_clockVisible;
+            }
+            _f11WasPressed = f11IsPressed && !ctrlIsPressed;
 
 
 
             // --- DEBOUNCING AND LOGIC EXECUTION ---
             // Only trigger if pressed NOW, but was NOT pressed in the previous frame.
+
+            // --- FLOATING NOTES LOGIC ---
+            bool pgUpIsPressed = (GetAsyncKeyState(VK_PRIOR) & 0x8000) != 0;
+            bool pgDnIsPressed = (GetAsyncKeyState(VK_NEXT) & 0x8000) != 0;
+
+            // Toggle Visibility (PgDn)
+            if (pgDnIsPressed && !_pgDnWasPressed) { _notesVisible = !_notesVisible; }
+            _pgDnWasPressed = pgDnIsPressed;
+
+            // Toggle Writing/Move Mode (PgUp)
+            if (pgUpIsPressed && !_pgUpWasPressed) { _writingMode = !_writingMode; }
+            _pgUpWasPressed = pgUpIsPressed;
+
+            // If Writing Mode is active, hijack the keys for typing and moving
+            if (_writingMode)
+            {
+                // 1. Scalable Smooth Movement (Scale speed based on screen resolution)
+                float moveSpeed = _screenHeight * 0.005f;
+                if ((GetAsyncKeyState(VK_LEFT) & 0x8000) != 0) _noteX -= moveSpeed;
+                if ((GetAsyncKeyState(VK_RIGHT) & 0x8000) != 0) _noteX += moveSpeed;
+                if ((GetAsyncKeyState(VK_UP) & 0x8000) != 0) _noteY -= moveSpeed;
+                if ((GetAsyncKeyState(VK_DOWN) & 0x8000) != 0) _noteY += moveSpeed;
+
+                // 2. Typing A-Z (Hex 0x41 to 0x5A)
+                for (int i = 0x41; i <= 0x5A; i++)
+                {
+                    bool isKeyPressed = (GetAsyncKeyState(i) & 0x8000) != 0;
+                    if (isKeyPressed && !_keyWasPressed[i])
+                    {
+                        if (_noteText == "Type here...") _noteText = "";
+                        _noteText += (char)i;
+                    }
+                    _keyWasPressed[i] = isKeyPressed;
+                }
+                
+                // 3. Spacebar
+                bool spaceIsPressed = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+                if (spaceIsPressed && !_spaceWasPressed) { _noteText += " "; }
+                _spaceWasPressed = spaceIsPressed;
+
+
+                // 4. Backspace
+                bool backIsPressed = (GetAsyncKeyState(VK_BACK) & 0x8000) != 0;
+                if (backIsPressed && !_backWasPressed)
+                {
+                    if (_noteText.Length > 0)
+                    {
+                        _noteText = _noteText.Substring(0, _noteText.Length - 1);
+                    }
+                }
+                _backWasPressed = backIsPressed;
+
+                // 5. Enter (New Line)
+                bool enterIsPressed = (GetAsyncKeyState(VK_RETURN) & 0x8000) != 0;
+                if (enterIsPressed && !_enterWasPressed)
+                {
+                    if (_noteText == "Type here...") _noteText = "";
+                    _noteText += "\n";
+                }
+                _enterWasPressed = enterIsPressed;
+            }
 
             // Toggle Panic Mode
             if (f12IsPressed && !_f12WasPressed) { _panicMode = !_panicMode; }
@@ -431,6 +552,40 @@ namespace OverlayTestCounter
                 gfx.DrawText(_font, _blackBrush, margin + shadowOffset, margin + shadowOffset, textToDraw);
                 // Draw main text over it
                 gfx.DrawText(_font, _greenBrush, margin, margin, textToDraw);
+            }
+
+            // --- FLOATING NOTES RENDERING ---
+            if (_notesVisible)
+            {
+                if (_writingMode)
+                {
+                    string helperText = "[EDIT MODE ACTIVE - PRESS PGUP TO SAVE]";
+
+                    var noteSize = gfx.MeasureString(_smallfont, _noteText + "_");
+                    var helperSize = gfx.MeasureString(_smallfont, helperText);
+
+                    // Make padding scalable based on screen height
+                    float padding = _screenHeight * 0.0005f;
+
+                    // Draw a dark semi-transparent background so you know it's selected
+                    gfx.FillRectangle(gfx.CreateSolidBrush(0, 0, 0, 150), _noteX - padding, _noteY - padding, _noteX + noteSize.X + padding, _noteY + noteSize.Y + padding);
+
+                    // Draw text with an underscore to look like a text editor
+                    gfx.DrawText(_smallfont, _greenBrush, _noteX, _noteY, _noteText + "_");
+
+                    // Calculate Y position for helper text so it sits perfectly above the note box
+                    float helperY = _noteY - helperSize.Y - padding - margin;
+                    gfx.DrawText(_smallfont, _blueBrush, _noteX, helperY, helperText);
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(_noteText))
+                    {
+                        // Not editing, just draw the normal text with a shadow
+                        gfx.DrawText(_smallfont, _blackBrush, _noteX + shadowOffset, _noteY + shadowOffset, _noteText);
+                        gfx.DrawText(_smallfont, _greenBrush, _noteX, _noteY, _noteText);
+                    }
+                }
             }
 
             // Draw Stopwatch and Lap Time (Top Right)
